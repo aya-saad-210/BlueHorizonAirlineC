@@ -4,11 +4,6 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.types import ElicitResult, ServerNotification, ToolListChangedNotification
 
-# NOTE: this is the DEV-PHASE client, used only for quick local testing while
-# the server still supports `python server.py stdio` as a fallback. The
-# client actually used for the final demo is client_http.py, which talks to
-# the server over Streamable HTTP -- see that file and the README for why.
-
 server_params = StdioServerParameters(
     command=sys.executable,
     args=[r"C:\Users\zizos\OneDrive\Desktop\blu hor - Copy\mcp_server\Server.py", "stdio"],
