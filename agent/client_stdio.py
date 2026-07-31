@@ -1,3 +1,9 @@
+"""
+client.py — Stdio MCP Client for Blue Horizon Airlines IROPS Assistant
+======================================================================
+This client connects to server.py via stdio transport and demonstrates 
+all client-side protocol capabilities.
+"""
 import asyncio
 import sys
 from mcp import ClientSession, StdioServerParameters
