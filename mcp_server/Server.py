@@ -26,6 +26,7 @@ from tools_write import assign_reserve_crew, issue_compensation, rebook_passenge
 from notifications_logic import check_supervisor_credentials, session_state
 from sampling_logic import generate_disruption_notice
 from progress_logic import rebook_all_passengers_on_flight
+from tools_search import search_knowledge_base
 
 # =========================================================
 # CAPABILITY NEGOTIATION
@@ -46,6 +47,7 @@ mcp.tool()(get_passenger_booking)
 mcp.tool()(rebook_passenger)
 mcp.tool()(rebook_all_passengers_on_flight)
 mcp.tool()(generate_disruption_notice)
+mcp.tool()(search_knowledge_base)
 
 
 # =========================================================
