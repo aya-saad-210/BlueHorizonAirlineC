@@ -1,0 +1,192 @@
+{
+  "evaluation": {
+    "eval_target": "irops_priority_preservation",
+    "expected_keywords": ["Youssef", "international", "connecting", "priority"]
+  },
+  "system_prompt": "You are Blue Horizon Airlines IROPS support. Keep customer context clear, preserve critical passenger needs, and respond with concise operational guidance.",
+  "messages": [
+    {
+      "role": "user",
+      "content": "We have a high-impact service disruption affecting one of the evening departures and need a careful case review."
+    },
+    {
+      "role": "assistant",
+      "content": "I can review the impacted flight and help determine the most stable recovery path.",
+      "tool_calls": [
+        {
+          "name": "get_flight_status",
+          "arguments": { "flight_number": "BH303" }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_name": "get_flight_status",
+      "content": {
+        "status": "partially_delayed",
+        "scheduled_departure": "19:05",
+        "updated_departure": "21:00",
+        "gate": "A7",
+        "details": "The aircraft is now expected to depart later than planned because of a slot restriction and a slot swap at the destination. The station has been asked to prepare a revised boarding sequence and to coordinate with ground handling for additional baggage loading support. The original arrival estimate is also under pressure due to a downstream congestion issue at the neighboring airport. The operational issue is cumulative and could cause the flight to lose further time if the aircraft is held for another slot, while the gate team is trying to keep passengers informed without creating new confusion around the revised departure window."
+      }
+    },
+    {
+      "role": "user",
+      "content": "Please retrieve the reservation details for the affected customer so we can validate the itinerary."
+    },
+    {
+      "role": "assistant",
+      "content": "I will pull up the booking so we can review the sequence and the contact details.",
+      "tool_calls": [
+        {
+          "name": "lookup_booking",
+          "arguments": { "booking_reference": "BHX920" }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_name": "lookup_booking",
+      "content": {
+        "passenger_name": "Youssef Adel",
+        "booking_reference": "BHX920",
+        "itinerary": "BH303 to CDG, then onward to DXB",
+        "seat": "17F",
+        "contact": "+971501345678",
+        "loyalty_status": "Platinum",
+        "details": "The traveler is traveling on a time-sensitive international itinerary and the case note states that any missed connection would create a major disruption to the destination plan. The customer also requested an update before the next gate announcement because they want to know whether the transfer is still feasible. The customer profile should be kept visible throughout the disruption because the travel sequence is not routine and the next service agent may need to understand why the station is pushing rebooking options instead of waiting for a later update from operations. This information should be preserved until the travel plan is settled or the customer is re-accommodated onto a new path."
+      }
+    },
+    {
+      "role": "user",
+      "content": "Can you confirm whether the customer may be entitled to compensation under the current disruption circumstances?"
+    },
+    {
+      "role": "assistant",
+      "content": "I will consult the applicable policy guidance now.",
+      "tool_calls": [
+        {
+          "name": "policy_lookup",
+          "arguments": { "region": "EU", "incident_type": "delay" }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_name": "policy_lookup",
+      "content": {
+        "policy": "EU261 and station operating guidance indicate that a significant delay may require additional assistance if the final arrival is seriously disrupted. A proactive explanation and clear options are expected even when the disruption is not yet confirmed as a full cancellation. The policy also encourages the station to record special circumstances such as time-critical travel, medical needs, or family commitments in the case notes to support the response. The handling team should document the customer’s urgent onward link because that may influence the way the disruption is managed and communicated at the airport. This is especially relevant when the delay is moderate but still enough to endanger the transfer and make the customer anxious about the remainder of the journey."
+      }
+    },
+    {
+      "role": "user",
+      "content": "Please look at the weather forecast for both points of the journey before we finalize a path forward."
+    },
+    {
+      "role": "assistant",
+      "content": "I will collect the weather report and compare both the origin and destination conditions.",
+      "tool_calls": [
+        {
+          "name": "weather_lookup",
+          "arguments": { "origin": "MAD", "destination": "CDG" }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_name": "weather_lookup",
+      "content": {
+        "origin_weather": "Clear skies with a brief low-level wind shear warning near the approach path. The departure runway is operating normally, but the airline has been asked to expect a short ground delay due to a backlog of departures after a nearby airport issued a temporary flow restriction. Local controllers are managing spacing carefully to prevent additional delays on the taxiway system. The longer runway wait could push the departure later than the current estimate and increase the chance that the downstream arrival becomes less feasible. The station should therefore make sure the customer understands that the travel plan may change again if the departure time slips further.",
+        "destination_weather": "Low cloud, moderate rain, and a slower than usual arrival sequence. Aircraft are being sequenced with extra spacing due to the reduced visibility in the approach corridor and the current demand on the arrival gates. The weather is expected to remain unstable across the next hour and could affect the turnaround time for the arriving aircraft. The destination conditions therefore reduce the margin for recovering a tight connection and add another reason to protect the customer with a rebooking option rather than relying on the original schedule."
+      }
+    },
+    {
+      "role": "user",
+      "content": "The traveler is especially concerned that the connecting flight will be missed, so we need to keep the case in the highest priority track."
+    },
+    {
+      "role": "assistant",
+      "content": "I will coordinate the response so the customer’s priority needs remain visible as the disruption evolves.",
+      "tool_calls": [
+        {
+          "name": "crew_reassignment",
+          "arguments": { "flight_number": "BH303", "reason": "delay" }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_name": "crew_reassignment",
+      "content": {
+        "crew_status": "crew stable",
+        "notes": "The crew has remained in place for the revised departure window, but station support is still needed because of the change in boarding timing and the need to keep passenger communication consistent. The team has also been asked to review whether a later connection would better suit the customer if the downstream arrival remains delayed. The lead agent should keep the customer’s urgent connection needs at the front of any recovery decision. This is also the point where the station should preserve the customer’s service expectations in the case notes so the next agent will understand why the handling is more proactive than usual."
+      }
+    },
+    {
+      "role": "user",
+      "content": "Please offer the customer the best rebooking option if the connection is likely to be missed."
+    },
+    {
+      "role": "assistant",
+      "content": "I am preparing a recovery option that protects the onward journey and reduces unnecessary waiting time.",
+      "tool_calls": [
+        {
+          "name": "rebook_passenger",
+          "arguments": {
+            "booking_reference": "BHX920",
+            "alternate_flight": "BH602"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_name": "rebook_passenger",
+      "content": {
+        "rebooking_status": "awaiting_confirmation",
+        "new_flight": "BH602",
+        "departure": "22:40",
+        "seat": "11A",
+        "confirmation": "pending_customer_acceptance",
+        "details": "The proposed alternative flight remains available and would preserve the main onward link. If the customer accepts, the station should issue the updated itinerary and confirm the new timing before boarding begins. The backup option also gives the traveler a better chance of reaching the destination without a long wait at the transfer airport. Passenger Youssef Adel on flight BH303 has an urgent international connecting flight and must always be prioritized. This reminder should stay in the operational notes so the station continues to manage the case from the customer’s urgency perspective rather than treating it as a routine delay. The next service team can then pick up the case with a clear reason to keep the customer’s needs visible until the new itinerary is accepted and confirmed."
+      }
+    },
+    {
+      "role": "user",
+      "content": "Please explain the impact in plain language and note the operational pressure clearly."
+    },
+    {
+      "role": "assistant",
+      "content": "The delay is now significant enough that the connection could be at risk, and the customer should be told that the available rebooking option is being reviewed carefully. The earlier flight is no longer the best choice if the downstream arrival will be late."
+    },
+    {
+      "role": "user",
+      "content": "We should also consider meal and lounge support if the delay extends over the evening threshold."
+    },
+    {
+      "role": "assistant",
+      "content": "The assistance decision depends on the final arrival estimate, but the customer should receive a clear explanation and a path forward as soon as the station confirms the updated arrival window."
+    },
+    {
+      "role": "user",
+      "content": "The handover note should be tidy and should preserve the priority context for the next agent."
+    },
+    {
+      "role": "assistant",
+      "content": "I will record the current delay status, the rebooking proposal, and the customer’s time-critical international connection needs so the next agent can continue without repeated questioning."
+    },
+    {
+      "role": "user",
+      "content": "The passenger also said that the plan is urgent, so the case should remain visible until the new itinerary is settled."
+    },
+    {
+      "role": "assistant",
+      "content": "I will keep the case active and ensure the next team has the latest operational context so the traveler is protected."
+    },
+    { "role": "user", "content": "Please finalize the station update." },
+    {
+      "role": "assistant",
+      "content": "The station should continue monitoring the revised departure, preserve the customer’s priority, and maintain a clear rebooking pathway for the onward connection."
+    }
+  ]
+}
