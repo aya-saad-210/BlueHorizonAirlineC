@@ -1,0 +1,10 @@
+# Person C's additions for the Memory & RAG Lab (rag/ + agent/rag_integration.py + mcp_server/rag_tool.py).
+# Merge with the rest of the team's requirements (memory/, context_eval/, retrieval_eval/) into one
+# root requirements.txt before submission -- kept separate here so this piece is easy to diff/review.
+
+chromadb>=1.5.0        # vector store: ANN (HNSW) index + metadata payload store + metadata index
+rank_bm25>=0.2.2       # keyword scorer for hybrid_search.py
+scikit-learn>=1.5.0    # HashingVectorizer, the default offline embedding backend (rag/embeddings.py)
+numpy>=1.26.0
+python-dotenv>=1.0.0   # loads rag/.env (never commit the filled-in file)
+anthropic>=0.40.0      # only imported when ANTHROPIC_API_KEY is set (live mode in rag/llm_client.py)
