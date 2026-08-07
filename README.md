@@ -215,3 +215,1222 @@ available as a fallback the host's own model can fill in.
 - Hardcoded demo supervisor credentials (`notifications_logic.py`) are only
   acceptable because this is a class project; production would need real
   auth, not a PIN dictionary in source.
+
+
+# Blue Horizon IROPS Assistant — Memory & RAG Lab
+
+Extension of the Blue Horizon Airlines MCP Server Lab.
+
+This project adds two major capabilities to the existing IROPS Assistant:
+
+1. **Long-term memory** for preserving useful information across an ongoing disruption workflow.
+2. **Retrieval-grounded policy knowledge** using RAG, hybrid retrieval, agentic retrieval, and Self-RAG-style verification.
+
+The project also includes evaluation components for context-management strategies and RAG architectures.
+
+---
+
+# 1. Project Problem
+
+Blue Horizon Airlines' IROPS Assistant already has DB-backed operational tools such as:
+
+* `get_flight_status`
+* `get_passenger_booking`
+* `rebook_passenger`
+* `rebook_all_passengers_on_flight`
+* `assign_reserve_crew`
+* `issue_compensation`
+* `generate_disruption_notice`
+
+Two major problems appear during realistic disruption workflows.
+
+## 1.1 Context gets buried
+
+During a large disruption, an operations agent may perform many tool calls:
+
+* checking flights,
+* checking passenger bookings,
+* rebooking passengers,
+* checking crew availability,
+* checking duty-time limits,
+* issuing compensation.
+
+Important information from an earlier conversation can become buried under later tool output.
+
+For example, a passenger may have an important connecting flight, but that information can disappear from the active context after many subsequent operations.
+
+The `memory/` and `context_eval/` components address this problem.
+
+## 1.2 Policy knowledge is not sufficiently exposed
+
+The original MCP server exposed only a short duty-time resource containing the basic:
+
+* 8-hour flying limit
+* 14-hour duty limit
+
+However, real policy decisions require much more information:
+
+* compensation eligibility,
+* distance and delay tiers,
+* extraordinary-circumstance exceptions,
+* mechanical-failure distinctions,
+* supervisor overrides,
+* reserve-crew activation rules,
+* loyalty-tier adjustments.
+
+The `rag/` and retrieval components provide this policy knowledge without requiring every rule to become a separate hardcoded tool.
+
+---
+
+# 2. Repository Structure
+
+```text
+BlueHorizonAirlineC_Memory_Rag/
+│
+├── agent/
+│   ├── client_http.py
+│   ├── client_stdio.py
+│   └── rag_integration.py
+│
+├── context_eval/
+│   ├── run_comparison.py
+│   ├── strategies.py
+│   └── test_transcripts/
+│
+├── database/
+│   └── database files / setup
+│
+├── mcp_server/
+│   ├── dbase.py
+│   ├── elicitation_logic.py
+│   ├── keyword_search.py
+│   ├── notifications_logic.py
+│   ├── progress_logic.py
+│   ├── rag_tool.py
+│   ├── sampling_logic.py
+│   ├── Server.py
+│   ├── tools_read.py
+│   ├── tools_search.py
+│   └── tools_write.py
+│
+├── memory/
+│   ├── short_term.py
+│   ├── scratchpad.py
+│   ├── episodic_store.py
+│   ├── routing.py
+│   ├── semantic_store.py
+│   └── consolidation.py
+│
+├── rag/
+│   ├── agentic_rag.py
+│   ├── chunking.py
+│   ├── compensation_policy.md
+│   ├── duty_time_policy.md
+│   ├── embeddings.py
+│   ├── hybrid_search.py
+│   ├── ingest.py
+│   ├── keyword_index.py
+│   ├── llm_client.py
+│   ├── naive_rag.py
+│   ├── self_rag_verify.py
+│   └── vector_store.py
+│
+├── retrieval_eval/
+│   ├── run_comparison.py
+│   └── test_questions/
+│
+└── README.md
+```
+
+---
+
+# 3. RAG / Retrieval Layer
+
+## 3.1 Policy Manuals
+
+The RAG knowledge base contains two policy manuals:
+
+### `compensation_policy.md`
+
+Contains rules covering:
+
+* compensation eligibility,
+* compensation amounts,
+* distance and delay tiers,
+* cancellation rules,
+* missed connections,
+* extraordinary circumstances,
+* mechanical-failure distinctions,
+* supervisor approval,
+* loyalty-tier adjustments,
+* audit requirements.
+
+### `duty_time_policy.md`
+
+Contains rules covering:
+
+* daily duty limits,
+* flying limits,
+* reserve crew activation,
+* supervisor overrides,
+* license-specific rules,
+* international routes,
+* crew assignment conditions.
+
+The documents are divided into numbered clauses such as `4.2b` and `5.2`.
+
+This allows retrieval to return precise policy clauses rather than entire manuals.
+
+---
+
+# 4. Chunking and Embeddings
+
+## `rag/chunking.py`
+
+The chunker is section/sub-clause aware.
+
+Each chunk contains metadata such as:
+
+```text
+source
+doc_type
+section
+clause
+last_reviewed
+```
+
+This preserves clause identifiers and makes policy-specific retrieval more precise.
+
+## `rag/embeddings.py`
+
+The project uses a local `HashingVectorizer` backend from scikit-learn.
+
+The embedding configuration is:
+
+```text
+384 dimensions
+local computation
+no API key required
+no external embedding service required
+```
+
+This keeps ingestion reproducible and allows the RAG pipeline to run offline.
+
+---
+
+# 5. Vector Store
+
+## `rag/vector_store.py`
+
+Chroma is used as the persistent vector database.
+
+The vector store uses:
+
+* Chroma `PersistentClient`
+* HNSW approximate-nearest-neighbor indexing
+* cosine similarity
+* metadata attached to every chunk
+* metadata filtering through Chroma
+
+The generated vector database is rebuilt from the policy documents using `ingest.py`.
+
+The current policy corpus produces:
+
+```text
+47 chunks total
+27 compensation-policy chunks
+20 duty-time-policy chunks
+```
+
+---
+
+# 6. Ingestion Pipeline
+
+## `rag/ingest.py`
+
+The ingestion process is:
+
+```text
+Policy Markdown files
+        ↓
+Chunking
+        ↓
+Metadata attachment
+        ↓
+Embedding
+        ↓
+Chroma upsert
+        ↓
+Queryable vector store
+```
+
+Run:
+
+```powershell
+python rag/ingest.py
+```
+
+After ingestion, the vector store should report approximately:
+
+```text
+47 chunks
+```
+
+---
+
+# 7. RAG Architectures
+
+Three retrieval architectures were implemented against the same policy corpus.
+
+| Architecture | Implementation         | Mechanism                                            |
+| ------------ | ---------------------- | ---------------------------------------------------- |
+| Naive RAG    | `rag/naive_rag.py`     | ANN/vector retrieval → answer                        |
+| Hybrid RAG   | `rag/hybrid_search.py` | ANN + BM25 → Reciprocal Rank Fusion                  |
+| Agentic RAG  | `rag/agentic_rag.py`   | retrieve → reason → retrieve again, capped at 3 hops |
+
+## 7.1 Naive RAG
+
+Naive RAG performs vector-based retrieval and generates an answer from the retrieved chunks.
+
+It is simple and fast, but can return semantically similar content from the wrong policy manual.
+
+## 7.2 Hybrid RAG
+
+Hybrid RAG combines:
+
+* vector/ANN retrieval
+* BM25 keyword retrieval
+
+The results are merged using Reciprocal Rank Fusion.
+
+This is particularly useful for policy questions containing exact clause identifiers such as:
+
+```text
+4.2b
+5.2
+3.1
+```
+
+## 7.3 Agentic RAG
+
+Agentic RAG performs multiple retrieval hops.
+
+The first retrieval is used to determine what information is still needed, after which another query can be generated and retrieved.
+
+The implementation limits the process to a maximum of three hops.
+
+---
+
+# 8. Observed Retrieval Failure
+
+A real test demonstrated why hybrid retrieval is useful.
+
+For:
+
+> What does clause 4.2b say about mechanical failure compensation?
+
+The vector-only top result was:
+
+```text
+duty_time_policy:sec3:3.2
+```
+
+which was the wrong policy manual.
+
+The keyword-only result was:
+
+```text
+compensation_policy:sec4:4.2b
+```
+
+which was the correct clause.
+
+This demonstrates that semantic similarity alone can retrieve the wrong policy, while exact policy identifiers are handled much better by keyword retrieval.
+
+Hybrid retrieval combines both signals.
+
+---
+
+# 9. Retrieval Evaluation
+
+The retrieval evaluation compares the three RAG architectures using the project's domain-specific test set.
+
+Run:
+
+```powershell
+cd retrieval_eval
+python run_comparison.py
+```
+
+Observed results:
+
+| RAG Architecture | Avg Accuracy (%) | Avg Tokens / Query | Avg Latency / Query (s) |
+| ---------------- | ---------------: | -----------------: | ----------------------: |
+| Naive            |            30.30 |                 24 |                0.000028 |
+| Hybrid           |            60.61 |                 26 |                0.000009 |
+| Agentic          |            39.39 |                 45 |                0.000003 |
+
+### Selected architecture: Hybrid
+
+Hybrid retrieval achieved the highest measured accuracy:
+
+```text
+60.61%
+```
+
+while using only slightly more tokens than Naive RAG.
+
+Therefore, **Hybrid RAG is the default retrieval architecture used by the agent integration.**
+
+---
+
+# 10. Self-RAG-Style Verification
+
+## `rag/self_rag_verify.py`
+
+Retrieval results are not automatically trusted.
+
+The system performs two explicit verification stages.
+
+## 10.1 Post-Retrieval Relevance Check
+
+Every retrieved chunk is evaluated for relevance to the query.
+
+```text
+Query
+ ↓
+Retrieved chunks
+ ↓
+Relevance judge
+ ↓
+Relevant chunks kept
+Irrelevant chunks dropped
+```
+
+Irrelevant chunks are removed before the answer is trusted.
+
+## 10.2 Post-Generation Support Check
+
+After generation, the answer is checked against the surviving relevant chunks.
+
+```text
+Relevant context
+ ↓
+Generated answer
+ ↓
+Support judge
+ ↓
+Supported → return answer
+Unsupported → fallback response
+```
+
+## 10.3 Failure Behavior
+
+If no retrieved chunk is relevant, the system does not return a guessed answer.
+
+Instead it returns:
+
+```text
+I don't have enough grounded information in the policy manuals to
+answer that confidently. Please escalate to a supervisor or Flight
+Ops / Passenger Relations rather than relying on this answer.
+```
+
+The verification decision is also recorded in:
+
+```text
+VERIFICATION_LOG
+```
+
+### Demonstrated failure case
+
+The following query cannot be answered by the policy corpus:
+
+```text
+What is the CEO's personal cell phone number?
+```
+
+The retrieved chunks were judged irrelevant and the verification gate failed.
+
+The final answer shown to the user was the fallback response rather than an invented phone number.
+
+---
+
+# 11. Agent RAG Integration
+
+## `agent/rag_integration.py`
+
+This is the main integration point for policy questions.
+
+The flow is:
+
+```text
+Policy question
+      ↓
+Hybrid retrieval
+      ↓
+Self-RAG relevance check
+      ↓
+Answer generation
+      ↓
+Support check
+      ↓
+Grounded answer OR fallback
+```
+
+Example successful query:
+
+```text
+What does clause 4.2b say about mechanical failure compensation?
+```
+
+Result:
+
+```text
+grounded=True
+architecture=hybrid_search
+```
+
+For an unsupported question:
+
+```text
+What is the CEO's personal cell phone number?
+```
+
+Result:
+
+```text
+grounded=False
+architecture=hybrid_search
+```
+
+and the fallback response is returned.
+
+---
+
+# 12. MCP RAG Integration
+
+The MCP server exposes:
+
+```text
+answer_policy_question
+```
+
+This tool accepts:
+
+```text
+question
+policy_area
+```
+
+where `policy_area` can be:
+
+```text
+compensation
+duty_time
+any
+```
+
+The tool routes policy questions through the RAG integration rather than duplicating retrieval logic inside the MCP server.
+
+The existing:
+
+```text
+policy://duty-time-limits
+```
+
+resource remains useful for quick access to the basic 8h / 14h limits.
+
+The new RAG tool handles more complicated cases such as:
+
+* exceptions,
+* sub-clauses,
+* compensation eligibility,
+* override conditions.
+
+---
+
+# 13. Memory Layer
+
+## `memory/`
+
+The Memory layer addresses the problem of important information being lost during long IROPS conversations.
+
+The implementation contains:
+
+```text
+short_term.py
+scratchpad.py
+episodic_store.py
+semantic_store.py
+routing.py
+consolidation.py
+```
+
+## Main responsibilities
+
+### Short-term memory
+
+Keeps the current working conversation state.
+
+### Scratchpad
+
+Maintains temporary working information needed while solving the current disruption.
+
+### Episodic memory
+
+Stores event-specific experiences and past disruption episodes.
+
+### Semantic memory
+
+Stores information that is useful beyond a single event.
+
+### Routing
+
+Determines where information should be stored or recalled.
+
+### Consolidation
+
+Promotes useful information and handles memory consolidation/conflict resolution.
+
+The Memory component was smoke-tested independently and the individual memory modules executed successfully.
+
+---
+
+# 14. Shared Self-RAG Verification for Memory
+
+The same verification functions used by RAG are designed to be reusable for memory recall:
+
+```text
+judge_relevance()
+judge_support()
+```
+
+This avoids having two separate verification implementations.
+
+The design therefore supports:
+
+```text
+RAG retrieval
+      ↓
+Self-RAG verification
+
+Memory retrieval
+      ↓
+Same verification functions
+```
+
+This ensures recalled information is also subject to relevance/support checking before being trusted.
+
+---
+
+# 15. Context Management Evaluation
+
+## `context_eval/`
+
+Four context-management strategies were implemented:
+
+1. `sliding_window`
+2. `observation_masking`
+3. `recursive_summarization`
+4. `zone_based_pruning`
+
+Run:
+
+```powershell
+cd context_eval
+python run_comparison.py
+```
+
+Observed results:
+
+| Strategy                | Avg Accuracy (%) | Avg Tokens | Avg Latency (s) |
+| ----------------------- | ---------------: | ---------: | --------------: |
+| Sliding Window          |            16.67 |        336 |        0.000061 |
+| Observation Masking     |            50.00 |       1410 |        0.000137 |
+| Recursive Summarization |            50.00 |       1053 |        0.000166 |
+| Zone-Based Pruning      |            50.00 |       1021 |        0.000128 |
+
+## Strategy descriptions
+
+### Sliding Window
+
+Keeps:
+
+* system prompt,
+* first user message,
+* latest conversation turns.
+
+### Observation Masking
+
+Preserves the conversation while limiting oversized tool outputs.
+
+### Recursive Summarization
+
+Compresses historical messages into deterministic summaries while preserving the latest turns.
+
+### Zone-Based Pruning
+
+Preserves important initial instructions and recent context while pruning or compressing middle tool-heavy sections.
+
+Based on the observed evaluation, **Zone-Based Pruning** provides the best balance among the strategies that reached the top measured accuracy, while using fewer tokens than Observation Masking and Recursive Summarization.
+
+---
+
+# 16. MCP Server
+
+## `mcp_server/`
+
+The MCP server provides the operational interface for the airline assistant.
+
+Main components include:
+
+```text
+Server.py
+dbase.py
+tools_read.py
+tools_write.py
+tools_search.py
+rag_tool.py
+sampling_logic.py
+progress_logic.py
+notifications_logic.py
+elicitation_logic.py
+keyword_search.py
+```
+
+## Read tools
+
+Examples:
+
+```text
+get_flight_status
+get_passenger_booking
+```
+
+## Write tools
+
+Examples:
+
+```text
+rebook_passenger
+rebook_all_passengers_on_flight
+assign_reserve_crew
+issue_compensation
+```
+
+## RAG tool
+
+```text
+answer_policy_question
+```
+
+## Additional MCP capabilities
+
+The server also demonstrates:
+
+* authentication,
+* dynamic tool-list updates,
+* sampling,
+* progress reporting,
+* elicitation,
+* notifications.
+
+---
+
+# 17. Supervisor Authentication
+
+The server initially exposes the front-desk tool set.
+
+After successful supervisor authentication:
+
+```text
+authenticate_supervisor
+```
+
+additional privileged tools become available, including:
+
+```text
+assign_reserve_crew
+issue_compensation
+```
+
+The client receives a:
+
+```text
+notifications/tools/list_changed
+```
+
+notification when the available tool list changes.
+
+This behavior was successfully demonstrated during the client smoke test.
+
+---
+
+# 18. Sampling
+
+`generate_disruption_notice` demonstrates MCP sampling.
+
+Instead of assuming that the server itself owns an LLM, the server asks the connected client to generate the passenger-facing disruption notice through MCP sampling.
+
+The real disruption reason is retrieved from the database before generating the notice.
+
+---
+
+# 19. Progress Reporting
+
+`rebook_all_passengers_on_flight` is designed as a long-running operation.
+
+It processes affected passengers individually and reports progress while the operation is running.
+
+This demonstrates MCP progress reporting rather than waiting silently until all passengers have been processed.
+
+---
+
+# 20. Database
+
+The MCP tools use the Blue Horizon airline database for operational information.
+
+The database stores information needed by the assistant, including:
+
+* passengers,
+* flights,
+* bookings,
+* crew,
+* compensation records.
+
+The MCP read/write tools interact with the database through the database connection layer.
+
+---
+
+# 21. Running the Project
+
+## Step 1 — Create and activate the virtual environment
+
+From the project root:
+
+```powershell
+python -m venv venv
+```
+
+Activate it:
+
+```powershell
+.\venv\Scripts\Activate.ps1
+```
+
+If PowerShell blocks activation:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+Then activate the environment again.
+
+---
+
+# 22. Select the VS Code Interpreter
+
+In VS Code:
+
+```text
+Ctrl + Shift + P
+```
+
+Select:
+
+```text
+Python: Select Interpreter
+```
+
+Choose:
+
+```text
+.\venv\Scripts\python.exe
+```
+
+All project commands should then use the same virtual environment.
+
+---
+
+# 23. Install Dependencies
+
+Install the project's required packages:
+
+```powershell
+pip install -r requirements.txt
+```
+
+The environment includes dependencies such as:
+
+```text
+mcp
+mysql-connector-python
+python-dotenv
+pydantic
+rank-bm25
+```
+
+The RAG implementation additionally requires the packages used by the vector store and local embedding backend, including:
+
+```text
+chromadb
+scikit-learn
+```
+
+---
+
+# 24. Build the RAG Vector Store
+
+Before testing RAG retrieval, run ingestion:
+
+```powershell
+python rag\ingest.py
+```
+
+Expected result:
+
+```text
+47 chunks
+```
+
+The vector store should then contain the policy chunks.
+
+---
+
+# 25. RAG Smoke Tests
+
+From the `rag` directory:
+
+```powershell
+cd rag
+python vector_store.py
+python naive_rag.py
+python hybrid_search.py
+python agentic_rag.py
+cd ..
+```
+
+These tests verify:
+
+* vector storage,
+* naive retrieval,
+* hybrid retrieval,
+* agentic retrieval.
+
+---
+
+# 26. Context Evaluation
+
+Run:
+
+```powershell
+cd context_eval
+python run_comparison.py
+cd ..
+```
+
+This produces the context strategy comparison table.
+
+---
+
+# 27. Retrieval Evaluation
+
+Run:
+
+```powershell
+cd retrieval_eval
+python run_comparison.py
+cd ..
+```
+
+This produces the RAG architecture comparison table.
+
+The current measured winner is:
+
+```text
+Hybrid
+```
+
+---
+
+# 28. Self-RAG Integration Test
+
+Run:
+
+```powershell
+cd agent
+python rag_integration.py
+cd ..
+```
+
+This tests both:
+
+1. a supported policy question,
+2. an unsupported question that must be blocked by the Self-RAG gate.
+
+Expected behavior:
+
+```text
+Supported question
+→ grounded=True
+→ policy answer returned
+
+Unsupported question
+→ grounded=False
+→ fallback message returned
+```
+
+---
+
+# 29. Running the MCP Server with STDIO
+
+Open Terminal 1:
+
+```powershell
+cd mcp_server
+python Server.py stdio
+```
+
+The terminal may appear to be waiting.
+
+That is expected for a server using STDIO: it is waiting for a client connection.
+
+Open Terminal 2:
+
+```powershell
+cd agent
+python client_stdio.py
+```
+
+The client should connect to:
+
+```text
+Blue Horizon IROPS Assistant
+```
+
+and display the available tools.
+
+---
+
+# 30. Running the MCP Server with Streamable HTTP
+
+Open Terminal 1:
+
+```powershell
+cd mcp_server
+python Server.py
+```
+
+The server runs as a Streamable HTTP service.
+
+Open Terminal 2:
+
+```powershell
+cd agent
+python client_http.py
+```
+
+The HTTP client connects to:
+
+```text
+http://127.0.0.1:8000/mcp
+```
+
+The Streamable HTTP connection was successfully established during testing.
+
+---
+
+# 31. Full System Flow
+
+The final architecture can be viewed as:
+
+```text
+                    ┌─────────────────────┐
+                    │     MCP Client      │
+                    │  STDIO / HTTP       │
+                    └──────────┬──────────┘
+                               │
+                               ▼
+                    ┌─────────────────────┐
+                    │     MCP Server      │
+                    │                     │
+                    │ Read / Write Tools  │
+                    │ Search              │
+                    │ RAG                 │
+                    │ Sampling            │
+                    │ Progress            │
+                    │ Authentication      │
+                    └───────┬─────┬───────┘
+                            │     │
+                ┌───────────┘     └────────────┐
+                ▼                              ▼
+       ┌────────────────┐              ┌───────────────┐
+       │    Database    │              │ Agent / RAG   │
+       │                │              │ Integration   │
+       │ flights        │              └───────┬───────┘
+       │ passengers     │                      │
+       │ bookings       │                      ▼
+       │ crew           │              ┌───────────────┐
+       │ compensation   │              │ Hybrid RAG    │
+       └────────────────┘              └───────┬───────┘
+                                               │
+                                               ▼
+                                      ┌─────────────────┐
+                                      │ Self-RAG Gate   │
+                                      │                 │
+                                      │ Relevance       │
+                                      │ Support         │
+                                      └────────┬────────┘
+                                               │
+                                ┌──────────────┴──────────────┐
+                                ▼                             ▼
+                         Grounded Answer                Fallback
+```
+
+Memory operates alongside the RAG layer to preserve and retrieve useful information during long-running disruption workflows.
+
+---
+
+# 32. Final Architecture Decisions
+
+Based on the implemented system and observed evaluation results:
+
+### RAG architecture
+
+```text
+Hybrid RAG
+```
+
+was selected because it achieved the highest measured retrieval accuracy:
+
+```text
+60.61%
+```
+
+### Context strategy
+
+```text
+Zone-Based Pruning
+```
+
+was selected as the preferred context-management strategy among the evaluated approaches because it achieved the highest accuracy tier while using fewer tokens than the other strategies in that tier.
+
+### Embedding backend
+
+```text
+Local HashingVectorizer
+```
+
+was selected to keep the retrieval pipeline offline, reproducible, and independent of paid embedding APIs.
+
+### Verification
+
+```text
+Self-RAG-style relevance + support checks
+```
+
+were added so that retrieval results and generated answers are not blindly trusted.
+
+---
+
+# 33. Testing Status
+
+The major components were tested independently during development.
+
+| Component                         | Status |
+| --------------------------------- | ------ |
+| Memory modules                    | PASS   |
+| RAG ingestion                     | PASS   |
+| Vector store                      | PASS   |
+| Naive RAG                         | PASS   |
+| Hybrid RAG                        | PASS   |
+| Agentic RAG                       | PASS   |
+| Context evaluation                | PASS   |
+| Retrieval evaluation              | PASS   |
+| Self-RAG verification             | PASS   |
+| Agent RAG integration             | PASS   |
+| MCP STDIO client/server           | PASS   |
+| MCP Streamable HTTP client/server | PASS   |
+| Supervisor authentication         | PASS   |
+| Dynamic tool-list notification    | PASS   |
+
+---
+
+# 34. Reproducibility
+
+The project is designed so the RAG vector database can be rebuilt from the policy documents rather than committing generated vector data.
+
+The reproducible sequence is:
+
+```powershell
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python rag\ingest.py
+python agent\rag_integration.py
+```
+
+For the full MCP demonstration:
+
+```text
+Terminal 1:
+    python mcp_server\Server.py
+
+Terminal 2:
+    python agent\client_http.py
+```
+
+For local STDIO testing:
+
+```text
+Terminal 1:
+    python mcp_server\Server.py stdio
+
+Terminal 2:
+    python agent\client_stdio.py
+```
+
+---
+
+# 35. Security Notes
+
+Do not commit secrets such as database credentials or API keys.
+
+The project uses `.env` files for environment-specific credentials.
+
+Before pushing the final repository, verify that:
+
+```text
+.env
+```
+
+files are ignored by Git and that no credentials have previously been committed.
+
+---
+
+# 36. Final Summary
+
+The completed Blue Horizon IROPS Assistant combines:
+
+```text
+MCP Server
+    +
+Database-backed airline tools
+    +
+Long-term Memory
+    +
+Context Management
+    +
+Hybrid RAG
+    +
+Agentic Retrieval
+    +
+Self-RAG Verification
+    +
+Retrieval Evaluation
+    +
+Context Evaluation
+```
+
+The result is an airline operations assistant that can work with real operational data while also retrieving policy knowledge, preserving useful information during long disruption workflows, and refusing to provide answers when the available evidence is insufficient.
