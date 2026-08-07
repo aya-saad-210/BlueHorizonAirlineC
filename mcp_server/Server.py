@@ -20,6 +20,7 @@ import sys
 
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.session import ServerSession
+from rag_tool import answer_policy_question
 
 from tools_read import get_flight_status, get_passenger_booking
 from tools_write import assign_reserve_crew, issue_compensation, rebook_passenger
@@ -48,6 +49,7 @@ mcp.tool()(rebook_passenger)
 mcp.tool()(rebook_all_passengers_on_flight)
 mcp.tool()(generate_disruption_notice)
 mcp.tool()(search_knowledge_base)
+mcp.tool()(answer_policy_question)
 
 
 # =========================================================
