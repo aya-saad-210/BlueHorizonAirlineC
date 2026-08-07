@@ -6,7 +6,7 @@ from mcp.types import ElicitResult, ServerNotification, ToolListChangedNotificat
 
 server_params = StdioServerParameters(
     command=sys.executable,
-    args=[r"C:\Users\zizos\OneDrive\Desktop\blu hor - Copy\mcp_server\Server.py", "stdio"],
+    args=[r"C:\Users\Hp\Desktop\c\BlueHorizonAirlineC_Memory_Rag\mcp_server\Server.py", "stdio"],
 )
 
 
