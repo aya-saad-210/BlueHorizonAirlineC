@@ -1,0 +1,195 @@
+{
+  "case_id": "BH707_lookahead",
+  "exercises": "benefits from lookahead/search",
+  "llm_mode": "mock",
+  "decomposition": {
+    "decomposition_first": {
+      "result": {
+        "plan": [
+          {
+            "id": "t1",
+            "instruction": "Check current flight status and affected bookings",
+            "depends_on": [],
+            "algorithm": "plan_and_solve"
+          },
+          {
+            "id": "t2",
+            "instruction": "Rebook affected passengers onto a suitable replacement flight",
+            "depends_on": [
+              "t1"
+            ],
+            "algorithm": "tree_of_thoughts"
+          },
+          {
+            "id": "t3",
+            "instruction": "Check crew duty-hour limits and assign reserve crew if needed",
+            "depends_on": [
+              "t1"
+            ],
+            "algorithm": "lats"
+          },
+          {
+            "id": "t4",
+            "instruction": "Determine compensation and draft the passenger disruption notice",
+            "depends_on": [
+              "t2",
+              "t3"
+            ],
+            "algorithm": "lats"
+          }
+        ],
+        "outputs": {
+          "t1": "[MOCK MODE] Apply the relevant Blue Horizon IROPS business rule: [MOCK MODE] Gather the concrete facts needed for: Subtask: Check current flight status and affected bookings: [MOCK MODE] {}",
+          "t2": "[MOCK MODE] Apply the relevant Blue Horizon IROPS business rule: [MOCK MODE] Gather the concrete facts needed for: Subtask: Rebook affected passengers onto a suitable replacement flight: [MOCK MODE] {'t1': '[MOCK",
+          "t3": "[MOCK MODE] Apply the relevant Blue Horizon IROPS business rule: [MOCK MODE] Gather the concrete facts needed for: Subtask: Check crew duty-hour limits and assign reserve crew if needed: [MOCK MODE] {'t1': '[MOCK",
+          "t4": "[MOCK MODE] Apply the relevant Blue Horizon IROPS business rule: [MOCK MODE] Gather the concrete facts needed for: Subtask: Determine compensation and draft the passenger disruption notice: [MOCK MODE] {'t2': \"[M"
+        }
+      },
+      "metrics": {
+        "llm_calls": 17,
+        "input_tokens": 1935,
+        "output_tokens": 673,
+        "total_tokens": 2608,
+        "avg_llm_latency_s": 0.0,
+        "wall_time_s": 0.0007,
+        "estimated_cost_usd": 0.0159
+      }
+    },
+    "dynamic": {
+      "result": [
+        {
+          "task": "Check current flight status",
+          "algorithm": "plan_and_solve",
+          "result": "Flight BH707: from CAI to CDG - Status: disrupted - Reason: weather",
+          "diverged_from_plan": false
+        },
+        {
+          "task": "Rebook the next affected passenger",
+          "algorithm": "tree_of_thoughts",
+          "result": "[MOCK MODE] Check current flight status: Flight BH707: from CAI to CDG - Status: disrupted - Reason: weather",
+          "diverged_from_plan": false
+        },
+        {
+          "task": "Check crew duty-hour limits for assigned crew",
+          "algorithm": "lats",
+          "result": "No crew currently assigned to BH707 in the system.",
+          "diverged_from_plan": false
+        }
+      ],
+      "metrics": {
+        "llm_calls": 5,
+        "input_tokens": 608,
+        "output_tokens": 60,
+        "total_tokens": 668,
+        "avg_llm_latency_s": 0.0,
+        "wall_time_s": 0.12,
+        "estimated_cost_usd": 0.002724
+      },
+      "diverged_from_naive_plan": false
+    }
+  },
+  "planning_algorithms": {
+    "plan_and_solve": {
+      "result": "[MOCK MODE] Apply the relevant Blue Horizon IROPS business rule: [MOCK MODE] Gather the concrete facts needed for: Subtask: Choose the best replacement flight for BH707: [MOCK MODE] Flight BH707: from CAI to CDG ",
+      "metrics": {
+        "llm_calls": 4,
+        "input_tokens": 316,
+        "output_tokens": 140,
+        "total_tokens": 456,
+        "avg_llm_latency_s": 0.0,
+        "wall_time_s": 0.0001,
+        "estimated_cost_usd": 0.003048
+      }
+    },
+    "tree_of_thoughts": {
+      "result": [
+        {
+          "state": "Rebook onto the earliest direct replacement flight, preserving fare class",
+          "score": 0.85,
+          "rationale": "mock: direct + fare class preserved"
+        },
+        {
+          "state": "Rebook onto a later replacement flight with a layover, downgraded fare",
+          "score": 0.45,
+          "rationale": "mock: layover + downgraded fare"
+        }
+      ],
+      "best": {
+        "state": "Rebook onto the earliest direct replacement flight, preserving fare class",
+        "score": 0.85,
+        "rationale": "mock: direct + fare class preserved"
+      },
+      "metrics": {
+        "llm_calls": 9,
+        "input_tokens": 565,
+        "output_tokens": 156,
+        "total_tokens": 721,
+        "avg_llm_latency_s": 0.0,
+        "wall_time_s": 0.0001,
+        "estimated_cost_usd": 0.004035
+      }
+    }
+  },
+  "lats": {
+    "success": true,
+    "best_score": 1.0,
+    "iterations": 1,
+    "output": "Assign crew_id=1 as reserve crew to cover the disruption.",
+    "metrics": {
+      "llm_calls": 2,
+      "input_tokens": 199,
+      "output_tokens": 41,
+      "total_tokens": 240,
+      "avg_llm_latency_s": 0.0001,
+      "wall_time_s": 0.0586,
+      "estimated_cost_usd": 0.001212
+    }
+  },
+  "self_correction": {
+    "self_refine": {
+      "revised": false,
+      "final": "[MOCK MODE] Flight: BH707, passenger: rania.adly@example.com",
+      "metrics": {
+        "llm_calls": 2,
+        "input_tokens": 124,
+        "output_tokens": 13,
+        "total_tokens": 137,
+        "avg_llm_latency_s": 0.0,
+        "wall_time_s": 0.0,
+        "estimated_cost_usd": 0.000567
+      }
+    },
+    "reflexion": {
+      "success": true,
+      "trials": 1,
+      "reflection_carried_forward": false,
+      "episodic_buffer": [],
+      "metrics": {
+        "llm_calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "avg_llm_latency_s": 0.0,
+        "wall_time_s": 0.0642,
+        "estimated_cost_usd": 0.0
+      }
+    },
+    "grounded_vs_ungrounded": {
+      "ungrounded": {
+        "success": true,
+        "score": 1.0,
+        "details": [
+          "Ungrounded critique found no issues in the text."
+        ]
+      },
+      "grounded": {
+        "success": false,
+        "score": 0.0,
+        "details": [
+          "Existing approved compensation of 120.00 already on file."
+        ]
+      },
+      "ungrounded_wrongly_accepted_grounded_caught_it": true
+    }
+  }
+}
