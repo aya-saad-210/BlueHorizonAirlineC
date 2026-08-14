@@ -28,7 +28,7 @@ from notifications_logic import check_supervisor_credentials, session_state
 from sampling_logic import generate_disruption_notice
 from progress_logic import rebook_all_passengers_on_flight
 from tools_search import search_knowledge_base
-
+from tools_planning import plan_irops_response
 # =========================================================
 # CAPABILITY NEGOTIATION
 # =========================================================
@@ -50,7 +50,7 @@ mcp.tool()(rebook_all_passengers_on_flight)
 mcp.tool()(generate_disruption_notice)
 mcp.tool()(search_knowledge_base)
 mcp.tool()(answer_policy_question)
-
+mcp.tool()(plan_irops_response)
 
 # =========================================================
 # TOOL: authenticate_supervisor
