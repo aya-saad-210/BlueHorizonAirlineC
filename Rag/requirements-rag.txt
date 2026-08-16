@@ -7,4 +7,4 @@ rank_bm25>=0.2.2       # keyword scorer for hybrid_search.py
 scikit-learn>=1.5.0    # HashingVectorizer, the default offline embedding backend (rag/embeddings.py)
 numpy>=1.26.0
 python-dotenv>=1.0.0   # loads rag/.env (never commit the filled-in file)
-anthropic>=0.40.0      # only imported when ANTHROPIC_API_KEY is set (live mode in rag/llm_client.py)
+google-genai>=1.0.0      
