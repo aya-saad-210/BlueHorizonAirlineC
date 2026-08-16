@@ -14,6 +14,22 @@
 # that the grounded environment correctly rejects (duplicate compensation
 # -- the LLM has no way to know a pending row already exists unless it
 # actually queries for it).
+#
+# IMPORTANT (found by actually running the BH808 case, not by inspection):
+# the FIRST version of UngroundedCritique's prompt asked the model to
+# judge the action broadly ("does this look correct?"), which let it
+# invent unrelated objections (missing policy justification, ambiguous
+# voucher type, etc.) and reject the action for the WRONG reason --
+# producing success=False by accident, never because it detected the
+# duplicate (which it structurally cannot see). That made the grounded-
+# vs-ungrounded comparison non-deterministic and, worse, meaningless even
+# when it happened to come out False: a critique that rejects for the
+# wrong reason doesn't demonstrate what grounding buys you. The prompt
+# below scopes the critique to text-only, surface-level plausibility and
+# explicitly tells the model it cannot check duplicates/history, so it
+# reliably says "looks fine" (the ungrounded critique's honest, correct
+# answer given what it can see) and the grounded environment's real
+# duplicate check is what actually catches the failure.
 
 from __future__ import annotations
 
@@ -74,20 +90,38 @@ class GroundedEnvironment:
 class UngroundedCritique:
     """The LLM judging its own proposed action, from text alone -- no DB,
     no MCP call. This is the 'ungrounded' half of section 9's required
-    comparison."""
+    comparison.
+
+    Deliberately scoped to SURFACE-LEVEL text plausibility only (not
+    policy/business-rule compliance, not duplicate/history checks) --
+    the model is told explicitly it cannot see the database, so it isn't
+    tempted to invent unrelated objections and reject for the wrong
+    reason. This is what makes the divergence from GroundedEnvironment's
+    real duplicate check meaningful: the ungrounded critique gives its
+    honest, correct answer given what it can see ("the text looks fine"),
+    and grounding is what catches the duplicate it structurally cannot."""
 
     def evaluate(self, proposed_action: str, context: str) -> EnvironmentFeedback:
         critique = generate_json(
             system=(
-                "You are reviewing a proposed IROPS action for obvious problems. "
-                "You do NOT have database access -- judge only from the text given."
+                "You are reviewing a proposed IROPS action for INTERNAL TEXT "
+                "CONSISTENCY ONLY. You do NOT have database access and cannot "
+                "verify duplicates, prior records, eligibility, or business-rule "
+                "compliance -- do NOT flag those as issues, since you have no way "
+                "to check them; assume the action is otherwise policy-compliant "
+                "unless the text itself is contradictory. Only flag a genuine "
+                "problem that is visible in the text itself: a malformed or "
+                "missing amount, a missing recipient, or an internally "
+                "contradictory statement."
             ),
             user=f"Context:\n{context}\n\nProposed action:\n{proposed_action}\n\n"
-                 "Does this action look correct? List any issues you can spot from the text alone.",
+                 "Based only on what is written here (not on policies or records "
+                 "you cannot see), is this a well-formed, internally consistent "
+                 "action? List only issues visible in the text itself.",
             schema=SelfCritique,
         )
         return EnvironmentFeedback(
             success=critique.passes,
             score=1.0 if critique.passes else 0.3,
-            details=critique.issues or ["Ungrounded critique found no issues in the text."],
+            details=critique.issues or ["Ungrounded critique found no textual issues -- looks well-formed."],
         )
