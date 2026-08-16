@@ -7,16 +7,17 @@
 # memory/).
 #
 # Same MODE pattern as Rag/llm_client.py on purpose (live if
-# MISTRAL_API_KEY is set, mock otherwise), extended with two things the
+# GEMINI_API_KEY is set, mock otherwise), extended with two things the
 # planning algorithms actually need that plain Q&A didn't:
 #   1. generate_json(...)   -- forces a JSON object matching a Pydantic
-#      schema back from the model, using Mistral's native tool-calling (a
-#      single "emit" tool whose parameters = the Pydantic JSON schema,
-#      tool_choice="any" so the model must call it). This is the
+#      schema back from the model, using Gemini's native structured-output
+#      mode (response_mime_type="application/json" +
+#      response_schema=<cleaned schema dict>, the google-genai SDK's built-in
+#      replacement for manual tool-calling JSON extraction). This is the
 #      structured-output mechanism that replaces the toolkit's
 #      `llm.with_structured_output(...)` (LangChain-only).
 #   2. usage metering -- every call increments CALL_COUNT and TOKEN_COUNT
-#      (from the real Mistral response.usage in live mode; from a
+#      (from the real Gemini response.usage_metadata in live mode; from a
 #      deterministic word-count estimate, clearly labeled, in mock mode) so
 #      planning_eval/runner.py can report REAL numbers instead of inventing
 #      them, per the spec's "never fabricate metrics" rule.
@@ -25,18 +26,25 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import re
 import time
 from dataclasses import dataclass, field
 from typing import Type, TypeVar
 
 from dotenv import load_dotenv
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 load_dotenv()
 
-MODE = "live" if os.getenv("MISTRAL_API_KEY") else "mock"
-MODEL = os.getenv("PLANNING_MISTRAL_MODEL", os.getenv("MISTRAL_MODEL", "mistral-large-latest"))
+MODE = "live" if os.getenv("GEMINI_API_KEY") else "mock"
+# NOTE: os.getenv(key, default) only falls back to `default` when the key
+# is completely UNSET -- if `.env` defines PLANNING_GEMINI_MODEL= (present
+# but empty, exactly what .env.example ships), os.getenv returns "" and
+# the nested-default chain silently produces an empty MODEL, which the
+# genai SDK then rejects with "model is required." `or`-chaining treats
+# an empty string the same as unset, which is what we actually want here.
+MODEL = os.getenv("PLANNING_GEMINI_MODEL") or os.getenv("GEMINI_MODEL") or "gemini-2.5-flash"
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -75,14 +83,15 @@ class UsageMeter:
 
 METER = UsageMeter()
 
-# Mistral pricing changes over time and is out of scope to hardcode
-# precisely; this is a clearly-labeled ESTIMATE using mistral-large-latest
-# list pricing at time of writing ($0.50 / MTok in, $1.50 / MTok out), used
-# only to produce an order-of-magnitude "Estimated Cost" column, never
-# presented as an exact bill. Check https://mistral.ai/pricing before
-# trusting this for a real budget decision.
-_EST_PRICE_PER_MTOK_IN = 0.50
-_EST_PRICE_PER_MTOK_OUT = 1.50
+# Gemini pricing changes over time and is out of scope to hardcode
+# precisely; this is a clearly-labeled ESTIMATE using gemini-2.5-flash list
+# pricing at time of writing ($0.30 / MTok in, $2.50 / MTok out), used only
+# to produce an order-of-magnitude "Estimated Cost" column, never
+# presented as an exact bill. Check
+# https://ai.google.dev/gemini-api/docs/pricing before trusting this for a
+# real budget decision.
+_EST_PRICE_PER_MTOK_IN = 0.30
+_EST_PRICE_PER_MTOK_OUT = 2.50
 
 
 def estimated_cost_usd(input_tokens: int, output_tokens: int) -> float:
@@ -100,56 +109,237 @@ def _word_count_tokens(*texts: str) -> int:
     return max(1, round(words * 1.3))
 
 
+# Retry policy for transient errors: mainly HTTP 429 rate limits (common on
+# free-tier Gemini API keys once planning_eval/runner.py fires several
+# sequential calls per test case across the whole suite), but also raw
+# connection drops -- some providers reset the TCP connection under load
+# instead of returning a clean 429 response, and that failure mode is just
+# as transient and just as worth retrying. This is NOT hidden from the
+# metrics: METER.record still only fires on the call that actually
+# succeeds, so latency/token numbers reflect the real, successful call, not
+# the retries around it.
+#
+# Two layers, not just one: reactive retry-after-failure (below) AND a
+# proactive minimum spacing between call *attempts* (_throttle, used by
+# both _live_text and _live_json before every attempt including the
+# first). A workspace with a low sustained rate limit will keep 429'ing a
+# burst of back-to-back retries just as fast as it 429's a burst of fresh
+# calls -- backoff alone doesn't fix that if the calls immediately before
+# and after it are still packed close together. Spacing every attempt out
+# reduces how often the limit gets hit in the first place, not just how
+# hard we retry once it has been.
+_MAX_RETRIES = 8
+_BASE_BACKOFF_S = 2.0
+_MAX_BACKOFF_S = 60.0
+# Default spacing assumes Gemini's free-tier Flash limit (commonly
+# reported around 10-15 RPM as of mid-2026) -- 4.5s keeps you comfortably
+# under ~13 RPM. Free-tier limits vary by model/account/region, so check
+# your actual cap at https://aistudio.google.com (or your Cloud console's
+# quota page) and override with GEMINI_MIN_CALL_INTERVAL_S if needed.
+_MIN_CALL_INTERVAL_S = float(os.getenv("GEMINI_MIN_CALL_INTERVAL_S") or "4.5")
+
+_last_call_at = 0.0
+
+
+def _throttle() -> None:
+    """Block until at least _MIN_CALL_INTERVAL_S has passed since the last
+    call attempt (success or failure). Runs before every attempt, not just
+    after a 429, so a sustained low rate limit gets fewer opportunities to
+    fire in the first place."""
+    global _last_call_at
+    wait_s = _MIN_CALL_INTERVAL_S - (time.monotonic() - _last_call_at)
+    if wait_s > 0:
+        time.sleep(wait_s)
+    _last_call_at = time.monotonic()
+
+
+def _is_rate_limited(exc: Exception) -> bool:
+    status = (
+        getattr(exc, "status_code", None)
+        or getattr(exc, "code", None)  # google.genai.errors.ClientError exposes .code
+        or getattr(exc, "raw_status_code", None)
+    )
+    if status == 429:
+        return True
+    text = str(exc).lower()
+    return (
+        "429" in text
+        or "rate limit" in text
+        or "rate_limited" in text
+        or "resource_exhausted" in text  # Gemini's 429 error status string
+    )
+
+
+def _is_connection_error(exc: Exception) -> bool:
+    """Raw network failure (dropped/reset connection, timeout, DNS hiccup)
+    rather than a clean HTTP response -- these come from httpx/httpcore
+    underneath the google-genai SDK, or occasionally as bare builtin
+    ConnectionError/TimeoutError, and are just as transient as a 429."""
+    if isinstance(exc, (ConnectionError, TimeoutError)):
+        return True
+    try:
+        import httpx
+        if isinstance(exc, httpx.RequestError):  # covers ConnectError,
+            # ReadError, WriteError, ConnectTimeout, PoolTimeout, etc.
+            return True
+    except ImportError:
+        pass
+    return False
+
+
+def _is_transient(exc: Exception) -> bool:
+    return _is_rate_limited(exc) or _is_connection_error(exc)
+
+
+def _call_with_retry(fn):
+    """Run fn() (a zero-arg call to client.models.generate_content(...)), retrying on
+    HTTP 429 or a dropped/reset connection, with exponential backoff +
+    jitter (capped at _MAX_BACKOFF_S) and a minimum spacing before every
+    attempt (see _throttle). Re-raises immediately for any error that
+    isn't transient (e.g. a real auth or schema error -- those should fail
+    fast, not get silently retried away)."""
+    for attempt in range(_MAX_RETRIES):
+        _throttle()
+        try:
+            return fn()
+        except Exception as exc:
+            if not _is_transient(exc) or attempt == _MAX_RETRIES - 1:
+                raise
+            reason = "429 rate limited" if _is_rate_limited(exc) else "connection dropped"
+            wait_s = min(_MAX_BACKOFF_S, _BASE_BACKOFF_S * (2 ** attempt) + random.uniform(0, 1))
+            print(f"[llm_client] {reason}, retrying in {wait_s:.1f}s "
+                  f"(attempt {attempt + 1}/{_MAX_RETRIES})")
+            time.sleep(wait_s)
+
+
 def _live_text(system: str, user: str, max_tokens: int = 800) -> str:
-    from mistralai import Mistral
+    from google import genai
+    from google.genai import types
 
-    client = Mistral(api_key=os.getenv("MISTRAL_API_KEY"))
+    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
     start = time.monotonic()
-    resp = client.chat.complete(
+    resp = _call_with_retry(lambda: client.models.generate_content(
         model=MODEL,
-        max_tokens=max_tokens,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-    )
+        contents=user,
+        config=types.GenerateContentConfig(
+            system_instruction=system,
+            max_output_tokens=max_tokens,
+        ),
+    ))
     elapsed = time.monotonic() - start
-    METER.record(resp.usage.prompt_tokens, resp.usage.completion_tokens, elapsed)
-    return resp.choices[0].message.content or ""
+    usage = resp.usage_metadata
+    METER.record(usage.prompt_token_count, usage.candidates_token_count, elapsed)
+    return resp.text or ""
 
 
-def _live_json(system: str, user: str, schema: Type[T], max_tokens: int = 800) -> T:
-    from mistralai import Mistral
+# Structured-output truncation retry: separate from _call_with_retry above
+# (that one handles network/429 failures on the request itself; this one
+# handles a request that *succeeded* but got cut off mid-JSON because
+# max_tokens was too small for what the model tried to emit -- e.g.
+# json.JSONDecodeError: Unterminated string). Doubling max_tokens and
+# asking again is the correct fix, not just raising the default once,
+# since the same schema can legitimately need very different output
+# lengths call to call.
+_JSON_RETRY_ATTEMPTS = 3
+_JSON_MAX_TOKENS_CAP = 6000
 
-    client = Mistral(api_key=os.getenv("MISTRAL_API_KEY"))
-    tool = {
-        "type": "function",
-        "function": {
-            "name": "emit",
-            "description": "Emit the structured result. Call this exactly once.",
-            "parameters": schema.model_json_schema(),
-        },
-    }
-    start = time.monotonic()
-    resp = client.chat.complete(
-        model=MODEL,
-        max_tokens=max_tokens,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        tools=[tool],
-        tool_choice="any",  # force a tool call rather than a free-text reply
-        parallel_tool_calls=False,  # exactly one "emit" call, not several
-    )
-    elapsed = time.monotonic() - start
-    METER.record(resp.usage.prompt_tokens, resp.usage.completion_tokens, elapsed)
-    message = resp.choices[0].message
-    tool_calls = message.tool_calls or []
-    for call in tool_calls:
-        if call.function.name == "emit":
-            return schema.model_validate(json.loads(call.function.arguments))
-    raise RuntimeError("Model did not return the expected 'emit' tool call")
+# Cache of cleaned schemas keyed by the Pydantic class -- _clean_schema_for_gemini
+# does a small amount of recursive dict work per call; every generate_json call
+# for the same schema (e.g. every decompose_goal call reusing GeneratedPlan)
+# would otherwise redo it for no reason.
+_SCHEMA_CACHE: dict[Type[BaseModel], dict] = {}
+
+
+def _clean_schema_for_gemini(schema: Type[BaseModel]) -> dict:
+    """Build a Gemini-compatible JSON schema from a Pydantic model.
+
+    Gemini's response_schema uses a restricted OpenAPI subset that rejects
+    two things Pydantic v2's model_json_schema() emits by default:
+      1. "additionalProperties" on every object -- this is exactly what
+         produced: 'Unknown name "additional_properties" at
+         generation_config.response_schema... Cannot find field.'
+      2. "$ref"/"$defs" for nested models -- not seen yet in this codebase's
+         error output, but it fails the same way the moment a schema has a
+         nested BaseModel (e.g. GeneratedPlan.tasks: List[Task]), so it's
+         resolved inline here proactively rather than waiting to hit that
+         error separately later.
+
+    Cached per schema class since the shape never changes between calls.
+    """
+    if schema in _SCHEMA_CACHE:
+        return _SCHEMA_CACHE[schema]
+
+    raw = schema.model_json_schema()
+    defs = raw.pop("$defs", {}) or raw.pop("definitions", {})
+
+    def resolve(node):
+        if isinstance(node, dict):
+            if "$ref" in node:
+                ref_name = node["$ref"].rsplit("/", 1)[-1]
+                return resolve(defs[ref_name])
+            cleaned = {
+                k: resolve(v)
+                for k, v in node.items()
+                if k not in ("additionalProperties", "default")
+            }
+            if "allOf" in cleaned and len(cleaned["allOf"]) == 1:
+                merged = resolve(node["allOf"][0])
+                merged.update({k: v for k, v in cleaned.items() if k != "allOf"})
+                return merged
+            return cleaned
+        if isinstance(node, list):
+            return [resolve(item) for item in node]
+        return node
+
+    cleaned_schema = resolve(raw)
+    _SCHEMA_CACHE[schema] = cleaned_schema
+    return cleaned_schema
+
+
+def _live_json(system: str, user: str, schema: Type[T], max_tokens: int = 1500) -> T:
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+
+    current_max_tokens = max_tokens
+    last_error: Exception = RuntimeError("Model did not return valid structured output")
+    cleaned_schema = _clean_schema_for_gemini(schema)
+
+    for json_attempt in range(_JSON_RETRY_ATTEMPTS):
+        start = time.monotonic()
+        resp = _call_with_retry(lambda mt=current_max_tokens: client.models.generate_content(
+            model=MODEL,
+            contents=user,
+            config=types.GenerateContentConfig(
+                system_instruction=system,
+                max_output_tokens=mt,
+                response_mime_type="application/json",  # forces JSON-only output
+                response_schema=cleaned_schema,  # cleaned dict, not the raw Pydantic
+                # class -- Gemini's schema subset rejects "additionalProperties"
+                # and "$ref" (see _clean_schema_for_gemini above)
+            ),
+        ))
+        elapsed = time.monotonic() - start
+        usage = resp.usage_metadata
+        METER.record(usage.prompt_token_count, usage.candidates_token_count, elapsed)
+
+        try:
+            raw_text = resp.text
+            if not raw_text:
+                raise RuntimeError("Model returned no text content (empty or blocked response)")
+            return schema.model_validate_json(raw_text)
+        except (json.JSONDecodeError, ValidationError, RuntimeError, AttributeError, ValueError) as exc:
+            last_error = exc
+
+        if json_attempt < _JSON_RETRY_ATTEMPTS - 1:
+            current_max_tokens = min(current_max_tokens * 2, _JSON_MAX_TOKENS_CAP)
+            print(f"[llm_client] structured output truncated/malformed "
+                  f"({type(last_error).__name__}: {last_error}), retrying with "
+                  f"max_tokens={current_max_tokens} "
+                  f"(attempt {json_attempt + 2}/{_JSON_RETRY_ATTEMPTS})")
+
+    raise last_error
 
 
 def generate_text(system: str, user: str, max_tokens: int = 800) -> str:
@@ -162,7 +352,7 @@ def generate_text(system: str, user: str, max_tokens: int = 800) -> str:
     return _live_text(system, user, max_tokens)
 
 
-def generate_json(system: str, user: str, schema: Type[T], max_tokens: int = 800) -> T:
+def generate_json(system: str, user: str, schema: Type[T], max_tokens: int = 1500) -> T:
     if MODE == "mock":
         start = time.monotonic()
         payload = _mock_json(schema, system, user)
