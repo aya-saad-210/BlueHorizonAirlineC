@@ -7,8 +7,8 @@
 # judgments are produced.
 #
 # TWO MODES:
-#   "live"  -- calls the real Anthropic Messages API using ANTHROPIC_API_KEY
-#              from `.env` (never committed -- see .env.example).
+#   "live"  -- calls the real Gemini API using GEMINI_API_KEY from `.env`
+#              (never committed -- see .env.example).
 #   "mock"  -- a deterministic, rule-based stand-in used automatically when
 #              no API key is configured, so the pipeline (chunking -> vector
 #              search -> hybrid merge -> agentic loop -> Self-RAG check) is
@@ -16,7 +16,7 @@
 #              credential in a grading environment. The mock is intentionally
 #              simple and clearly labelled in every response so nobody
 #              mistakes it for a real model's reasoning quality -- for the
-#              actual demo recording, set ANTHROPIC_API_KEY and use live mode.
+#              actual demo recording, set GEMINI_API_KEY and use live mode.
 #
 # This satisfies the guardrail "never commit an API key" while keeping the
 # retrieval architecture comparison (retrieval_eval/, owned by the
@@ -25,28 +25,110 @@
 from __future__ import annotations
 
 import os
+import random
 import re
+import time
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
-MODE = "live" if os.getenv("ANTHROPIC_API_KEY") else "mock"
-MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+MODE = "live" if os.getenv("GEMINI_API_KEY") else "mock"
+MODEL = os.getenv("GEMINI_MODEL") or "gemini-2.5-flash"
+
+# Retry policy for transient errors: HTTP 429 rate limits and raw
+# connection drops (some providers reset the TCP connection under load
+# instead of a clean 429). Mirrors planning/llm_client.py's policy so
+# both agents behave the same way under rate limiting / network hiccups.
+#
+# Two layers: reactive retry-after-failure (below) AND a proactive minimum
+# spacing between call attempts (_throttle, run before every attempt
+# including the first) -- a sustained low rate limit 429's a tight burst
+# of retries just as fast as it 429's a tight burst of fresh calls, so
+# backoff alone doesn't help unless attempts are also spaced out going in.
+_MAX_RETRIES = 8
+_BASE_BACKOFF_S = 2.0
+_MAX_BACKOFF_S = 60.0
+# Default spacing assumes Gemini's free-tier Flash limit (commonly reported
+# around 10-15 RPM as of mid-2026); check your actual cap at
+# https://aistudio.google.com and override with GEMINI_MIN_CALL_INTERVAL_S.
+_MIN_CALL_INTERVAL_S = float(os.getenv("GEMINI_MIN_CALL_INTERVAL_S") or "4.5")
+
+_last_call_at = 0.0
+
+
+def _throttle() -> None:
+    global _last_call_at
+    wait_s = _MIN_CALL_INTERVAL_S - (time.monotonic() - _last_call_at)
+    if wait_s > 0:
+        time.sleep(wait_s)
+    _last_call_at = time.monotonic()
+
+
+def _is_rate_limited(exc: Exception) -> bool:
+    status = (
+        getattr(exc, "status_code", None)
+        or getattr(exc, "code", None)  # google.genai.errors.ClientError exposes .code
+        or getattr(exc, "raw_status_code", None)
+    )
+    if status == 429:
+        return True
+    text = str(exc).lower()
+    return (
+        "429" in text
+        or "rate limit" in text
+        or "rate_limited" in text
+        or "resource_exhausted" in text  # Gemini's 429 error status string
+    )
+
+
+def _is_connection_error(exc: Exception) -> bool:
+    if isinstance(exc, (ConnectionError, TimeoutError)):
+        return True
+    try:
+        import httpx
+        if isinstance(exc, httpx.RequestError):
+            return True
+    except ImportError:
+        pass
+    return False
+
+
+def _is_transient(exc: Exception) -> bool:
+    return _is_rate_limited(exc) or _is_connection_error(exc)
+
+
+def _call_with_retry(fn):
+    for attempt in range(_MAX_RETRIES):
+        _throttle()
+        try:
+            return fn()
+        except Exception as exc:
+            if not _is_transient(exc) or attempt == _MAX_RETRIES - 1:
+                raise
+            reason = "429 rate limited" if _is_rate_limited(exc) else "connection dropped"
+            wait_s = min(_MAX_BACKOFF_S, _BASE_BACKOFF_S * (2 ** attempt) + random.uniform(0, 1))
+            print(f"[llm_client] {reason}, retrying in {wait_s:.1f}s "
+                  f"(attempt {attempt + 1}/{_MAX_RETRIES})")
+            time.sleep(wait_s)
 
 
 def _live_call(system: str, user: str, max_tokens: int = 600) -> str:
-    import anthropic  # imported lazily so `pip install anthropic` is only
-    # required when a real key is actually configured
+    # imported lazily so `pip install google-genai` is only required when a
+    # real key is actually configured.
+    from google import genai
+    from google.genai import types
 
-    client = anthropic.Anthropic()
-    resp = client.messages.create(
+    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    resp = _call_with_retry(lambda: client.models.generate_content(
         model=MODEL,
-        max_tokens=max_tokens,
-        system=system,
-        messages=[{"role": "user", "content": user}],
-    )
-    return "".join(block.text for block in resp.content if block.type == "text")
+        contents=user,
+        config=types.GenerateContentConfig(
+            system_instruction=system,
+            max_output_tokens=max_tokens,
+        ),
+    ))
+    return resp.text or ""
 
 
 def _mock_generate_answer(query: str, context_chunks: list[str]) -> str:
