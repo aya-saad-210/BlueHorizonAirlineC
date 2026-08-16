@@ -8,9 +8,9 @@
 # METRICS ARE REAL, NOT INVENTED: every number comes from
 # planning/llm_client.py's UsageMeter, which is reset before each
 # measured segment and read immediately after. In MOCK mode
-# (no MISTRAL_API_KEY set) every reported number is clearly labeled
+# (no GEMINI_API_KEY set) every reported number is clearly labeled
 # "(mock)" -- these exercise every code path correctly and honestly, but
-# are NOT the numbers to put in a final submission. Set MISTRAL_API_KEY
+# are NOT the numbers to put in a final submission. Set GEMINI_API_KEY
 # and re-run for the numbers that belong in the README's final table
 # (see planning/README section "Two ways to run this").
 
@@ -35,7 +35,7 @@ from planning.algorithms.tree_of_thoughts import tree_of_thoughts  # noqa: E402
 from planning.decomposition import decompose_goal, execute_plan  # noqa: E402
 from planning.dynamic_decomposition import dynamic_decomposition  # noqa: E402
 from planning.environment import GroundedEnvironment, UngroundedCritique  # noqa: E402
-from planning.llm_client import METER, MODE, estimated_cost_usd  # noqa: E402
+from planning.llm_client import METER, MODE, estimated_cost_usd, generate_text  # noqa: E402
 from planning_eval.test_suite import TEST_SUITE  # noqa: E402
 
 ARTIFACTS_DIR = Path(__file__).resolve().parent / "artifacts"
@@ -173,40 +173,50 @@ async def run_self_correction_comparison(case) -> dict:
     ctx = tools.StubSupervisorContext(policy="approve")
 
     async def attempt_fn(prompt: str) -> str:
-        # trial 1: naive amount, no duplicate check -- this is the failure
-        # the case exists to exercise. trial 2, INFORMED BY THE REFLECTION
-        # (which the real reflection text literally says: "check for an
-        # existing pending record... before acting"), does the correct
-        # thing: check first instead of blindly re-attempting the same
-        # write with a different number. Changing only the amount can
-        # NEVER fix this specific rejection -- issue_compensation() blocks
-        # ANY new compensation while one is pending/approved for this
-        # passenger+flight, regardless of amount. Discovered by actually
-        # running trial 2 with a different amount and watching it still
-        # fail, not by reading the business rule in isolation.
-        if "trial 1" in prompt.lower():
-            return proposed
-        return "Do not issue duplicate compensation -- confirm the existing pending compensation already covers this passenger/flight instead."
+        # REAL LLM call -- the model reads the full prompt, including any
+        # reflections carried over from a prior failed trial (see
+        # reflexion.py's `lessons` block), and decides what to propose.
+        # Nothing here is scripted: trial 1 has no reflections yet and
+        # will typically propose a naive compensation amount; if trial 1
+        # is rejected, trial 2's prompt literally contains the reflection
+        # text, and whether the model actually changes its behavior in
+        # response is a genuine test, not a guaranteed outcome.
+        return generate_text(
+            system=(
+                "You are resolving a passenger compensation request for a "
+                "disrupted flight. Propose ONE concrete action. If nothing in "
+                "your prior reflections tells you otherwise, propose a "
+                "specific compensation amount (state it clearly, e.g. 'Issue "
+                "150.00 USD compensation for the disruption.'). If a prior "
+                "reflection tells you to check for an existing record before "
+                "acting, do that instead: say explicitly that you are "
+                "withholding a new compensation write pending that check, and "
+                "do not state a new amount."
+            ),
+            user=prompt,
+        )
 
     async def grounded_check(attempt: str):
-        if "do not issue duplicate" in attempt.lower():
-            # Trial 2's real check: does a pending/approved record ACTUALLY
-            # already exist? If so, correctly avoiding a duplicate write is
-            # the right call -- grounded in the same real query the write
-            # tool itself would reject on, not assumed.
-            precheck = env.precheck_duplicate_compensation(case.passenger_email, case.flight_number)
-            confirmed_duplicate_exists = not precheck.success
-            return type(precheck)(
-                success=confirmed_duplicate_exists,
-                score=1.0 if confirmed_duplicate_exists else 0.0,
-                details=[f"Correctly avoided a duplicate write: {precheck.details[0]}"] if confirmed_duplicate_exists
-                        else ["No existing compensation found -- withholding action was NOT justified."],
-            )
         import re
         match = re.search(r"(\d+(?:\.\d+)?)\s*(USD|EUR|GBP|EGP)", attempt, re.IGNORECASE)
-        amount, currency = float(match.group(1)), match.group(2).upper()
-        return await env.evaluate_compensation(case.passenger_email, case.flight_number, amount, currency,
-                                                 "flight disrupted", ctx)
+        if match:
+            # The model proposed a concrete amount -- check it against the
+            # real write tool, which is what will actually reject a
+            # duplicate regardless of amount.
+            amount, currency = float(match.group(1)), match.group(2).upper()
+            return await env.evaluate_compensation(case.passenger_email, case.flight_number, amount, currency,
+                                                     "flight disrupted", ctx)
+        # The model withheld a new amount -- verify against the real DB
+        # whether that caution was actually justified, rather than trusting
+        # the model's own claim.
+        precheck = env.precheck_duplicate_compensation(case.passenger_email, case.flight_number)
+        confirmed_duplicate_exists = not precheck.success
+        return type(precheck)(
+            success=confirmed_duplicate_exists,
+            score=1.0 if confirmed_duplicate_exists else 0.0,
+            details=[f"Correctly withheld -- duplicate confirmed: {precheck.details[0]}"] if confirmed_duplicate_exists
+                    else ["Withheld action but no duplicate found -- withholding was NOT justified."],
+        )
 
     async def run_reflexion():
         return await reflexion(f"Issue correct compensation for {case.passenger_email} on {case.flight_number}",
@@ -271,6 +281,16 @@ def build_comparison_table(traces: list[dict]) -> str:
     lats_success_rate = sum(1 for t in traces if t["lats"].get("success")) / max(len([t for t in traces if "success" in t["lats"]]), 1)
     refl_success_rate = sum(1 for t in traces if t["self_correction"].get("reflexion", {}).get("success"))
     refl_total = len([t for t in traces if "reflexion" in t["self_correction"]])
+    # NOTE: refl_total counts every case where Reflexion actually ran, but
+    # only cases with a real pre-seeded duplicate (BH808_reflexion_duplicate_comp)
+    # exercise more than one trial. Reporting "success/total" alone hides
+    # that most of these succeed on trial 1 with nothing to reflect on --
+    # the multi-trial count below makes that visible instead of implying
+    # every case demonstrated cross-trial memory.
+    refl_multi_trial = sum(
+        1 for t in traces
+        if t["self_correction"].get("reflexion", {}).get("trials", 0) > 1
+    )
 
     rows = [
         ("Decomposition-first", df_metrics, "N/A (structural)"),
@@ -279,13 +299,15 @@ def build_comparison_table(traces: list[dict]) -> str:
         ("Tree of Thoughts", tot_metrics, "N/A (candidate quality, see traces)"),
         ("LATS", lats_metrics, f"{lats_success_rate:.0%} grounded success"),
         ("Self-Refine", sr_metrics, "N/A (rubric-based, no grounded success metric)"),
-        ("Reflexion", refl_metrics, f"{refl_success_rate}/{refl_total} grounded success"),
+        ("Reflexion", refl_metrics,
+         f"{refl_success_rate}/{refl_total} grounded success "
+         f"({refl_multi_trial}/{refl_total} cases needed more than 1 trial)"),
     ]
 
     lines = [
         f"LLM mode this run: **{MODE.upper()}** {LABEL} -- token/latency/cost numbers below are "
-        + ("deterministic mock estimates; re-run with MISTRAL_API_KEY set for real numbers."
-           if MODE == "mock" else "real, recorded from the live Mistral API."),
+        + ("deterministic mock estimates; re-run with GEMINI_API_KEY set for real numbers."
+           if MODE == "mock" else "real, recorded from the live Gemini API."),
         "",
         "| Method | Task Success / Accuracy | Avg LLM Calls | Avg Tokens | Avg Latency | Estimated Cost |",
         "|---|---|---|---|---|---|",
