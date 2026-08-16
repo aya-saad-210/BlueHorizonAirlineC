@@ -33,15 +33,24 @@ def dynamic_decomposition(goal: str, flight_number: str, ctx, max_steps: int = 5
         decision = generate_json(
             system=(
                 "You are an ADAPTIVE IROPS planner. Use prior observations before "
-                "deciding what comes next. If an observation reveals a problem "
-                "(e.g. a duty-hour breach, no available replacement flight, "
-                "existing compensation on file), change course instead of "
-                "continuing the original assumption."
+                "deciding what comes next. A full IROPS resolution is not just "
+                "passenger-facing -- it MUST also verify that any crew assigned "
+                "to the disrupted or replacement flight is legally within duty-"
+                "hour and flight-hour limits before the plan can be considered "
+                "handled. If you have not yet checked crew duty/flight hours for "
+                "this flight, that check belongs early in the plan, before "
+                "passenger notifications are finalized. If an observation "
+                "reveals a problem (e.g. a duty-hour breach, no available "
+                "replacement flight, existing compensation on file), change "
+                "course instead of continuing the original assumption -- for a "
+                "duty-hour breach specifically, escalate to supervisor approval "
+                "rather than assigning the breaching crew member anyway."
             ),
             user=f"Goal: {goal}\nFlight: {flight_number}\n"
                  f"Completed work and observations:\n{observation}\n\n"
                  "Decide the single best next task. Set done to true only when "
-                 "the goal is fully handled. When done is true, next_task is "
+                 "the goal is fully handled, INCLUDING a crew duty/flight-hour "
+                 "check for this flight. When done is true, next_task is "
                  "empty.",
             schema=DynamicDecision,
         )
@@ -54,7 +63,7 @@ def dynamic_decomposition(goal: str, flight_number: str, ctx, max_steps: int = 5
         algo = route_subtask(task_instruction)
         result = _execute_dynamic_step(task_instruction, flight_number, observation, ctx)
 
-        diverged = _looks_like_divergence(task_instruction, history)
+        diverged = _looks_like_divergence(history + [{"task": task_instruction, "result": result}])
         history.append({
             "task": task_instruction,
             "algorithm": algo.value,
@@ -64,14 +73,62 @@ def dynamic_decomposition(goal: str, flight_number: str, ctx, max_steps: int = 5
     return history
 
 
-def _looks_like_divergence(task_instruction: str, history: list[dict]) -> bool:
-    """Cheap, explicit heuristic (not vibes): a step counts as a divergence
-    from a naive up-front plan when its wording reacts to something an
-    up-front planner couldn't have known yet -- an approval/override, a
-    fallback, or a rejection carried over from the previous step."""
-    text = task_instruction.lower()
-    reactive_markers = ("override", "escalate", "fallback", "alternative", "instead", "supervisor")
-    return any(m in text for m in reactive_markers)
+def _looks_like_divergence(history: list[dict]) -> bool:
+    """Grounded AND specific -- a step counts as a genuine divergence from
+    an up-front plan only when the MOST RECENT completed step was itself a
+    duty/crew/compensation check AND its real, tool-grounded result shows
+    an actual problem an up-front planner could not have anticipated.
+
+    This replaces two earlier, looser attempts:
+      1. Keyword-matching the *next* instruction's wording ("override",
+         "escalate", ...) -- silently missed genuine reactions phrased
+         differently, and could fire on a step that had nothing to do
+         with a real observation.
+      2. Keyword-matching ANY prior result for generic markers including
+         "no crew currently assigned" and bare "rejected" -- both false-
+         positived constantly: "no crew currently assigned" is the
+         ORDINARY pre-assignment state for almost every flight (seed data
+         only pre-assigns crew for the duty-breach case), not a surprise;
+         bare "rejected" matches substrings like "was NOT rejected" too.
+         That version produced 100% divergence across every test case,
+         including BH404 -- a case explicitly designed to show NO
+         divergence (see its "exercises" field in test_suite.py) -- which
+         would have contradicted the README's own claims if left in.
+
+    This version requires the recent step to have actually been a
+    duty/crew/compensation check (via its task wording) before trusting
+    its result as a "problem" signal, and only matches specific,
+    tool-grounded phrases that only appear when something is genuinely
+    wrong -- not the default/expected state of "nothing assigned yet"."""
+    if not history:
+        return False
+
+    last = history[-1]
+    result_lower = last["result"].lower()
+    task_lower = last["task"].lower()
+
+    is_duty_or_crew_check = "duty" in task_lower or "crew" in task_lower
+    is_compensation_check = "compensation" in task_lower or "duplicate" in task_lower
+
+    if is_duty_or_crew_check and "at/over the legal duty-hour cap" in result_lower:
+        # A real, tool-grounded duty-hour breach -- the exact condition
+        # BH606_duty_breach exists to exercise. Deliberately does NOT
+        # match "no crew currently assigned" (that's the ordinary state
+        # before assignment, not a breach).
+        return True
+
+    if is_compensation_check and "already on file" in result_lower:
+        # A real, tool-grounded existing-compensation record.
+        return True
+
+    if "rejected:" in result_lower:
+        # A real write-tool rejection (see planning/environment.py:
+        # success = result.startswith("Approved"); a failed write starts
+        # with "Rejected: ...", a specific prefix -- not the bare
+        # substring "rejected", which also matches "was not rejected".
+        return True
+
+    return False
 
 
 def _execute_dynamic_step(task_instruction: str, flight_number: str, observation: str, ctx) -> str:
