@@ -4,7 +4,7 @@
 # toolkit (AmrSheta22/task_decomposition_and_planning, planning_lab/models.py)
 # on purpose -- the spec says preserve interfaces where possible. The only
 # real change is that this version has no LangChain dependency baked into
-# it; planning/llm_client.py (Mistral-based) fills the model-client role
+# it; planning/llm_client.py (Gemini-based) fills the model-client role
 # that the toolkit gave to `BaseChatModel`.
 #
 # nx.is_directed_acyclic_graph(...) inside Plan.validate_dag is the
