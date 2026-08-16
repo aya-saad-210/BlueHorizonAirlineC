@@ -5,7 +5,7 @@
 #
 # DESIGN DECISION (documented for the grader, also explained in the README):
 # We deliberately do NOT hard-depend on a paid embedding API (OpenAI,
-# Anthropic, Cohere...) for this lab. Two reasons:
+# Gemini, Cohere...) for this lab by default. Two reasons:
 #   1. The guardrails explicitly forbid committing an embedding-provider
 #      credential, and grading environments should not need one to run the
 #      demo end-to-end.
@@ -21,12 +21,14 @@
 # loop) correctly. It is NOT a substitute for a real semantic embedding
 # model in production.
 #
-# To use a real provider instead, set EMBEDDING_PROVIDER=openai (or
-# anthropic) plus the matching API key in `.env`, and swap the backend
-# returned by `get_embedding_backend()`. `AnthropicEmbeddingBackend` below
-# is left as a documented stub for that swap -- Anthropic does not currently
-# ship a first-party embeddings endpoint, so it raises clearly instead of
-# silently doing the wrong thing.
+# To use a real provider instead, set EMBEDDING_PROVIDER=gemini plus
+# GEMINI_API_KEY in `.env`, and get_embedding_backend() below switches to
+# `GeminiEmbeddingBackend`, which calls the real gemini-embedding-001
+# endpoint (output_dimensionality=768 via Matryoshka Representation
+# Learning, so the vector is smaller than the model's 3072-dim default).
+# Note this changes vector dimensionality vs. the local default
+# (EMBEDDING_DIM=384) -- rebuild the vector store (`ingest.py`) after
+# switching providers; the two are not interchangeable mid-index.
 
 from __future__ import annotations
 
@@ -37,6 +39,7 @@ import numpy as np
 from sklearn.feature_extraction.text import HashingVectorizer
 
 EMBEDDING_DIM = 384  # matches common small sentence-embedding model dims
+GEMINI_EMBEDDING_DIM = 768  # gemini-embedding-001, MRL-truncated from 3072
 
 
 class EmbeddingBackend(Protocol):
@@ -65,19 +68,28 @@ class LocalHashingEmbedding:
         return matrix.toarray().astype(np.float32).tolist()
 
 
-class AnthropicEmbeddingBackend:
-    """Documented stub for swapping in a real provider. Not used by default."""
+class GeminiEmbeddingBackend:
+    """Real embedding provider, opt-in via EMBEDDING_PROVIDER=gemini. Calls
+    the real gemini-embedding-001 endpoint -- not a mock, not a stub.
+    Requires GEMINI_API_KEY in `.env` (the same key used by
+    planning/llm_client.py and Rag/llm_client.py's live text-generation
+    mode)."""
 
-    def __init__(self):
-        raise NotImplementedError(
-            "Anthropic does not currently expose a first-party embeddings "
-            "endpoint. Set EMBEDDING_PROVIDER=openai and provide "
-            "OPENAI_API_KEY in .env to use OpenAI text-embedding-3-small "
-            "instead, or implement this class against your chosen provider."
-        )
+    def __init__(self, model: str = "gemini-embedding-001", output_dim: int = GEMINI_EMBEDDING_DIM):
+        self._model = model
+        self._output_dim = output_dim
 
     def embed(self, texts: list[str]) -> list[list[float]]:
-        raise NotImplementedError
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+        resp = client.models.embed_content(
+            model=self._model,
+            contents=texts,
+            config=types.EmbedContentConfig(output_dimensionality=self._output_dim),
+        )
+        return [e.values for e in resp.embeddings]
 
 
 def get_embedding_backend() -> EmbeddingBackend:
@@ -89,6 +101,6 @@ def get_embedding_backend() -> EmbeddingBackend:
     provider = os.getenv("EMBEDDING_PROVIDER", "local").lower()
     if provider == "local":
         return LocalHashingEmbedding()
-    if provider == "anthropic":
-        return AnthropicEmbeddingBackend()
+    if provider == "gemini":
+        return GeminiEmbeddingBackend()
     raise ValueError(f"Unknown EMBEDDING_PROVIDER: {provider}")
