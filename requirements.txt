@@ -1,5 +1,18 @@
-mcp
+# Consolidated for the whole repo (Memory/RAG agent + Planning agent).
+# Merged from the root requirements.txt, Rag/requirements-rag.txt, and the
+# new dependencies the Week 4 planning/ package introduces.
+
+mcp ==1.29.0
 mysql-connector-python
 python-dotenv
 pydantic
-rank-bm25
+rank-bm25>=0.2.2
+
+# Rag/ (Memory & RAG lab)
+chromadb>=1.5.0
+scikit-learn>=1.5.0
+numpy>=1.26.0
+google-genai>=1.0.0
+
+# planning/ (Decomposition & Planning lab, Week 4)
+networkx>=3.0           # DAG construction + acyclicity check (planning/models.py)           
