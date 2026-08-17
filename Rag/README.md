@@ -66,8 +66,8 @@ survives as its own piece of metadata for hybrid search to exploit.
   no network call) rather than via a paid provider. This keeps `ingest.py`
   and the whole retrieval pipeline runnable offline and reproducible for
   grading, per the guardrail against committing embedding-provider
-  credentials. `AnthropicEmbeddingBackend` is left as a documented stub for
-  swapping in a real provider later.
+  credentials. `GeminiEmbeddingBackend` is a real, opt-in provider (set
+  `EMBEDDING_PROVIDER=gemini`) that calls the actual gemini-embedding-001 endpoint.
 - `rag/ingest.py` — the runnable pipeline: `python rag/ingest.py` chunks
   both manuals, embeds every chunk, and upserts into the vector store.
   Currently produces **47 chunks** (27 compensation, 20 duty-time).
@@ -150,12 +150,12 @@ which previously did not exist anywhere in the system at all.
 
 ```bash
 pip install -r rag/requirements-rag.txt
-cp rag/.env.example rag/.env      # optional: set ANTHROPIC_API_KEY for live-mode generation
+cp Rag/env.example Rag/.env       # optional: set GEMINI_API_KEY for live-mode generation
 python rag/ingest.py              # builds rag/vector_db/ from policy_docs/
 python agent/rag_integration.py   # smoke test: one hybrid hit, one Self-RAG-caught failure
 ```
 
-Without `ANTHROPIC_API_KEY` set, `rag/llm_client.py` runs in a documented
+Without `GEMINI_API_KEY` set, `Rag/llm_client.py` runs in a documented
 deterministic **mock mode** so the full pipeline (chunk → embed → index →
 retrieve → hybrid-merge → agentic loop → Self-RAG check) is reproducible
 offline without a paid credential. Set the key for the real demo recording.
