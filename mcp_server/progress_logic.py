@@ -10,7 +10,7 @@
 
 import asyncio
 from mcp.server.fastmcp import Context
-from dbase import get_connection
+from mcp_server.dbase import get_connection
 
 
 async def rebook_all_passengers_on_flight(
