@@ -31,7 +31,7 @@ _AGENT_DIR = Path(__file__).resolve().parent.parent / "agent"
 if str(_AGENT_DIR) not in sys.path:
     sys.path.insert(0, str(_AGENT_DIR))
 
-from rag_integration import answer_policy_question as _answer_policy_question  # noqa: E402
+from agent.rag_integration import answer_policy_question as _answer_policy_question  # noqa: E402
 
 
 async def answer_policy_question(
