@@ -19,8 +19,8 @@ from __future__ import annotations
 
 import time
 
-from llm_client import generate_answer
-from vector_store import VectorStore
+from Rag.llm_client import generate_answer
+from Rag.vector_store import VectorStore
 
 _store: VectorStore | None = None
 
