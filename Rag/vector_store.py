@@ -34,7 +34,7 @@ from typing import Optional
 import chromadb
 from chromadb.config import Settings
 
-from embeddings import get_embedding_backend
+from Rag.embeddings import get_embedding_backend
 
 DB_DIR = Path(__file__).parent / "vector_db"
 COLLECTION_NAME = "blue_horizon_policy_manuals"
