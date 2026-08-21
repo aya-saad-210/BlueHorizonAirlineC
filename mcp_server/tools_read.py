@@ -5,7 +5,7 @@
 # This file only defines plain functions. The actual @mcp.tool() registration happens
 # in server.py, so this file has no dependency on the FastMCP instance itself.
 
-from dbase import get_connection
+from mcp_server.dbase import get_connection
 
 
 def get_flight_status(flight_number: str) -> str:
