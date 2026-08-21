@@ -14,8 +14,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from chunking import chunk_policy_docs
-from vector_store import VectorStore
+from Rag.chunking import chunk_policy_docs
+from Rag.vector_store import VectorStore
 
 POLICY_DOCS_DIR = Path(__file__).parent / "policy_docs"
 
