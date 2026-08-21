@@ -21,8 +21,8 @@
 
 from typing import Literal
 from mcp.server.fastmcp import Context
-from dbase import get_connection
-from elicitation_logic import request_supervisor_approval
+from mcp_server.dbase import get_connection
+from mcp_server.elicitation_logic import request_supervisor_approval
 
 MAX_FLYING_HOURS_PER_DAY = 8.00
 MAX_DUTY_HOURS_PER_DAY = 14.00
