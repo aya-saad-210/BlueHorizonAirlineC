@@ -18,7 +18,7 @@
 
 from mcp.server.fastmcp import Context
 from mcp.types import SamplingMessage, TextContent
-from dbase import get_connection
+from mcp_server.dbase import get_connection
 
 
 async def generate_disruption_notice(flight_number: str, ctx: Context) -> str:
