@@ -27,10 +27,10 @@ _RAG_DIR = Path(__file__).resolve().parent.parent / "rag"
 if str(_RAG_DIR) not in sys.path:
     sys.path.insert(0, str(_RAG_DIR))
 
-from agentic_rag import agentic_rag_answer  # noqa: E402
-from hybrid_search import hybrid_rag_answer  # noqa: E402
-from naive_rag import naive_rag_answer  # noqa: E402
-from self_rag_verify import verify_rag_response  # noqa: E402
+from Rag.agentic_rag import agentic_rag_answer  # noqa: E402
+from Rag.hybrid_search import hybrid_rag_answer  # noqa: E402
+from Rag.naive_rag import naive_rag_answer  # noqa: E402
+from Rag.self_rag_verify import verify_rag_response  # noqa: E402
 
 # Chosen by the retrieval_eval/ comparison table (accuracy vs. tokens vs.
 # latency across the domain test question set) -- see README for the table
