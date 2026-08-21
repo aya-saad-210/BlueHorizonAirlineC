@@ -32,7 +32,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from llm_client import judge_relevance, judge_support
+from Rag.llm_client import judge_relevance, judge_support
 
 # In-memory log a grader (or the demo script) can print at the end of a run
 # to see every verification decision, pass or fail. In production this
