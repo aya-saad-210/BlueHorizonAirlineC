@@ -411,7 +411,28 @@ def _mock_json(schema: Type[BaseModel], system: str, user: str) -> dict:
         return _mock_lats_actions(user)
     if name == "ValueEstimate":
         return {"score": 0.6}
+    if name == "CrewChoice":
+        return _mock_crew_choice(user)
     raise ValueError(f"No mock generator registered for schema {name}")
+
+
+def _mock_crew_choice(user: str) -> dict:
+    # state_graph/crew_reassignment_graph.py's constrained-ReAct node lists
+    # real candidates as "- crew_id=<n>, ...duty_hours_today=<x>" lines;
+    # deterministically pick the one with the LOWEST duty_hours_today
+    # (mirrors the instruction in that node's own prompt) so mock mode
+    # exercises the same "prefer least duty risk" logic a live model
+    # would, instead of just grabbing the first line.
+    rows = re.findall(r"crew_id=(\d+).*?duty_hours_today=([\d.]+)", user)
+    if not rows:
+        return {"thought": "[MOCK MODE] no candidate rows parsed from prompt",
+                "chosen_crew_id": 0, "reasoning": "[MOCK MODE] fallback, no candidates found"}
+    best_id, best_hours = min(rows, key=lambda r: float(r[1]))
+    return {
+        "thought": f"[MOCK MODE] comparing {len(rows)} real candidates by duty_hours_today",
+        "chosen_crew_id": int(best_id),
+        "reasoning": f"[MOCK MODE] crew_id={best_id} has the lowest duty_hours_today ({best_hours}) of the real candidates",
+    }
 
 
 _MOCK_LATS_CURSOR = {"i": 0}
