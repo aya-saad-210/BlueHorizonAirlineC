@@ -1,0 +1,6 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+# everything else (mcp, mysql-connector-python, pydantic, python-dotenv,
+# rank-bm25, chromadb, google-genai, networkx) comes from the repo root
+# requirements.txt -- install both into the same environment:
+#   pip install -r requirements.txt -r platform/backend/requirements.txt
