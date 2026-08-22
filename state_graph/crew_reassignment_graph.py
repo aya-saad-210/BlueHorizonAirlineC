@@ -72,6 +72,7 @@ from dbase import get_connection
 
 from graph_engine import StateGraph, NodeResult
 from checkpointer import MySQLCheckpointer
+from notifier import notify_crew_member
 
 MAX_DUTY_HOURS_PER_DAY = 14.00  # kept in sync with mcp_server/tools_write.py -- see
                                  # ISSUES.md Issue 6, the intent is one source of truth
@@ -83,19 +84,15 @@ GRAPH_NAME = "crew_reassignment"
 # We reuse the two model-call choke points the team already built in the
 # MCP Server / Memory-RAG / Planning labs instead of standing up a third
 # one here (planning/llm_client.py's generate_json for the constrained
-# ReAct choice, Rag/naive_rag.py for the RAG lookup). Both modules are
-# named llm_client.py, so we can't just sys.path-insert both directories
-# and `import llm_client` -- the second import would silently shadow the
-# first. planning/llm_client.py has no sibling top-level imports of its
-# own (google.genai is imported lazily inside its functions), so it's
-# safe to load it directly from its file path under a private module
-# name and never touch sys.path for it at all. Rag/naive_rag.py DOES do
-# `from llm_client import ...` / `from vector_store import ...` at module
-# scope, so Rag/ genuinely needs to be on sys.path for that import to
-# resolve -- but by then "llm_client" as a bare name is still free
-# because we loaded planning's copy under a different name, so Rag's own
-# llm_client.py is what naive_rag.py actually gets. No collision either
-# way.
+# ReAct choice, Rag/naive_rag.py for the RAG lookup). planning/llm_client.py
+# has no sibling top-level imports of its own (google.genai is imported
+# lazily inside its functions), so it's safe to load it directly from its
+# file path under a private module name -- this also sidesteps a name
+# collision, since Rag/ ships its own separate llm_client.py.
+# Rag/ is a proper package (Rag/__init__.py exists) whose modules import
+# each other as `from Rag.xxx import ...`, so unlike planning/llm_client.py
+# it genuinely needs the REPO ROOT (not the Rag/ directory itself) on
+# sys.path for `from Rag.naive_rag import naive_rag_answer` to resolve.
 # ---------------------------------------------------------------------
 
 _PLANNING_LLM_CLIENT_PATH = os.path.join(
@@ -109,9 +106,9 @@ sys.modules[_spec.name] = _planning_llm_client  # required before exec_module: d
 _spec.loader.exec_module(_planning_llm_client)
 generate_json = _planning_llm_client.generate_json
 
-_RAG_DIR = os.path.join(os.path.dirname(__file__), "..", "Rag")
-sys.path.insert(0, _RAG_DIR)
-from naive_rag import naive_rag_answer  # noqa: E402  (import after sys.path setup, on purpose)
+_REPO_ROOT = os.path.join(os.path.dirname(__file__), "..")
+sys.path.insert(0, _REPO_ROOT)
+from Rag.naive_rag import naive_rag_answer  # noqa: E402  (import after sys.path setup, on purpose)
 
 
 class CrewChoice(BaseModel):
@@ -331,9 +328,14 @@ def propose_crew(state: dict[str, Any]) -> NodeResult:
               "duty_hour_breach": duty_hour_breach,
               "current_request_id": request_id,
               "propose_crew_reasoning": choice_reasoning}
-    # TODO: actually notify the crew member here (SMS/app push/email --
-    # whatever channel your company would really use). The wait for their
+    # Real notification: actually reaches the crew member (live email if
+    # SMTP creds are configured, clearly-labeled mock otherwise -- either
+    # way a real crew_notifications row is written). The wait for their
     # reply is real, so we pause rather than block a thread.
+    notify_crew_member(
+        run_id=state["run_id"], crew_id=candidate["crew_id"], crew_name=candidate["full_name"],
+        flight_number=state["flight_number"], request_id=request_id,
+    )
     return NodeResult.pause("waiting_external", "await_crew_reply", state)
 
 
