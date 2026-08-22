@@ -1,0 +1,65 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body {
+  background: #0b1220;
+  color: #e6edf5;
+}
+
+* {
+  border-color: #223049;
+}
+
+:focus-visible {
+  outline: 2px solid #4dd2f2;
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+.card {
+  @apply bg-surface border border-border rounded-md p-5;
+}
+
+.label-eyebrow {
+  @apply font-mono text-[11px] tracking-wider uppercase text-muted;
+}
+
+.btn {
+  @apply px-3 py-1.5 rounded text-sm font-medium transition-colors;
+}
+
+.btn-primary {
+  @apply btn bg-cyan/90 text-bg hover:bg-cyan;
+}
+
+.btn-good {
+  @apply btn bg-good/90 text-bg hover:bg-good;
+}
+
+.btn-bad {
+  @apply btn bg-bad/90 text-bg hover:bg-bad;
+}
+
+.btn-ghost {
+  @apply btn bg-transparent border border-border text-ink hover:border-cyan/60;
+}
+
+.pulse-dot {
+  animation: pulse-dot 1.6s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
